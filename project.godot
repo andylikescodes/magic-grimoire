@@ -1,0 +1,32 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+
+config_version=5
+config/name="Magic Grimoire"
+config/description="🔮 A tactical hex-grid monster-collecting RPG blending Pokémon, Heroes of Might & Magic, and Cardcaptor Sakura"
+config/icon="res://assets/ui/icon.svg"
+
+[application]
+config/name="Magic Grimoire"
+config/version="0.1.0-alpha"
+run/main_scene="res://src/battle/battle_scene.tscn"
+config/features=PackedStringArray("4.3")
+
+[display]
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/mode=2
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+textures/canvas_textures/default_texture_filter=0
+
+[editor_plugins]
+enabled=PackedStringArray()
+
+[input]
+ui_click={ "type": 0, "events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":1,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":1,"canceled":false,"pressed":true,"double_click":false,"script":null) ] }
+ui_right_click={ "type": 0, "events": [Object(InputEventMouseButton,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"button_mask":2,"position":Vector2(0, 0),"global_position":Vector2(0, 0),"factor":1.0,"button_index":2,"canceled":false,"pressed":true,"double_click":false,"script":null) ] }

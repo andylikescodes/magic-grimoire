@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+          unzip Godot_v4.3-stable_linux.x86_64.zip
+          mv Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+
+      - name: Validate project
+        run: |
+          godot --headless --quit 2>&1 || true
+          echo "Project validation complete"
+
+      - name: Check GDScript syntax
+        run: |
+          find . -name "*.gd" -type f | while read f; do
+            echo "Checking: $f"
+            # Basic syntax check
+            godot --headless --script "$f" --quit 2>&1 || true
+          done

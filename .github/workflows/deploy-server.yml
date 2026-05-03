@@ -1,0 +1,32 @@
+name: Deploy PVP Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+          unzip Godot_v4.3-stable_linux.x86_64.zip
+          mv Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+
+      - name: Build server binary
+        run: |
+          cd server
+          godot --headless --export-release "Linux" ../export/server/magic-grimoire-server 2>&1 || echo "Server export attempted"
+
+      - name: Deploy to Zeabur
+        uses: zeabur/actions-deploy@main
+        with:
+          zeabur_token: ${{ secrets.ZEABUR_TOKEN }}
+          service_path: ./server

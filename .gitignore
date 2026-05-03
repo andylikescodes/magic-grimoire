@@ -1,0 +1,26 @@
+# Godot
+.godot/
+*.import
+export.cfg
+*.translation
+export_presets.cfg
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Build artifacts
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Godot specific
+*.uid

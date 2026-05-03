@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="CardData" load_steps=2 format=3 uid="uid://card_sample_01"]
+
+[ext_resource type="Script" path="res://src/core/card_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+card_id = "fire_salamander_001"
+display_name = "炎之精灵·伊芙利特"
+element = 1

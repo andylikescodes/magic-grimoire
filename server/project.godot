@@ -1,0 +1,17 @@
+; Engine configuration for PVP Server
+;
+config_version=5
+config/name="Magic Grimoire Server"
+config/description="PVP Matchmaking & Battle Server"
+config/icon="res://icon.svg"
+
+[application]
+config/name="Magic Grimoire Server"
+config/version="0.1.0-alpha"
+
+[display]
+window/size/viewport_width=640
+window/size/viewport_height=480
+
+[rendering]
+renderer/rendering_method="gl_compatibility"

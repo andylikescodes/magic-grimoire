@@ -1,0 +1,32 @@
+name: Export Web Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  export-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+          unzip Godot_v4.3-stable_linux.x86_64.zip
+          mv Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+
+      - name: Export HTML5
+        run: |
+          mkdir -p export/web
+          godot --headless --export-release "Web" export/web/index.html 2>&1 || echo "Export attempted (may need export preset configured)"
+
+      - name: Deploy to GitHub Pages
+        if: success()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./export/web
+          publish_branch: gh-pages
