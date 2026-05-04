@@ -1,186 +1,158 @@
 class_name HexGrid extends Resource
 
 ## ── Axial Coordinate System ──
-## q = column, r = row
+## q = column, r = row. Pointy-top hexes.
 ## See: https://www.redblobgames.com/grids/hexagons/
 
-## Hex directions (axial)
 const DIRECTIONS: Array[Vector2i] = [
 	Vector2i(1, 0),   Vector2i(1, -1),  Vector2i(0, -1),
 	Vector2i(-1, 0),  Vector2i(-1, 1),  Vector2i(0, 1),
 ]
 
-## Grid dimensions
-@export var radius: int = 8  # radius from center for hex map
-var cells: Dictionary = {}   # Vector2i -> HexCell
+@export var radius: int = 8
+var cells: Dictionary = {}
 
-## ── Initialization ──
+## ── Init ──
 
-func generate_hex_map(radius: int = 8) -> void:
-	self.radius = radius
+func generate_hex_map(r: int = 8) -> void:
+	radius = r
 	cells.clear()
 	for q in range(-radius, radius + 1):
-		for r in range(-radius, radius + 1):
-			var hex = Vector2i(q, r)
-			if abs(q + r) <= radius:  # ensures hex-shaped map
+		for r2 in range(-radius, radius + 1):
+			var hex = Vector2i(q, r2)
+			if abs(q + r2) <= radius:
 				cells[hex] = HexCell.new(hex)
 
 
 ## ── Geometry ──
 
-## Convert axial coordinates to world pixel position (pointy-top hex)
-## hex_size = the distance from center to a vertex
 static func hex_to_pixel(hex: Vector2i, hex_size: float = 32.0) -> Vector2:
-	var x: float = hex_size * (sqrt(3) * hex.x + sqrt(3) / 2.0 * hex.y)
-	var y: float = hex_size * (3.0 / 2.0 * hex.y)
+	var x = hex_size * (sqrt(3) * hex.x + sqrt(3) / 2.0 * hex.y)
+	var y = hex_size * (3.0 / 2.0 * hex.y)
 	return Vector2(x, y)
 
-## Convert pixel position to nearest axial hex coordinates
+
 static func pixel_to_hex(pos: Vector2, hex_size: float = 32.0) -> Vector2i:
-	var q: float = (sqrt(3) / 3.0 * pos.x - 1.0 / 3.0 * pos.y) / hex_size
-	var r: float = (2.0 / 3.0 * pos.y) / hex_size
+	var q = (sqrt(3) / 3.0 * pos.x - 1.0 / 3.0 * pos.y) / hex_size
+	var r = (2.0 / 3.0 * pos.y) / hex_size
 	return hex_round(q, r)
 
-## Round floating-point hex to nearest integer hex
+
 static func hex_round(q_f: float, r_f: float) -> Vector2i:
-	var s_f: float = -q_f - r_f
-	var q: int = roundi(q_f)
-	var r: int = roundi(r_f)
-	var s: int = roundi(s_f)
-
-	var q_diff: float = abs(q - q_f)
-	var r_diff: float = abs(r - r_f)
-	var s_diff: float = abs(s - s_f)
-
-	if q_diff > r_diff and q_diff > s_diff:
+	var s_f = -q_f - r_f
+	var q = roundi(q_f)
+	var r = roundi(r_f)
+	var s = roundi(s_f)
+	var qd = abs(q - q_f)
+	var rd = abs(r - r_f)
+	var sd = abs(s - s_f)
+	if qd > rd and qd > sd:
 		q = -r - s
-	elif r_diff > s_diff:
+	elif rd > sd:
 		r = -q - s
-	# else s stays
-
 	return Vector2i(q, r)
 
 
-## ── Navigation ──
+static func distance(a: Vector2i, b: Vector2i) -> int:
+	return maxi(abs(a.x - b.x), maxi(abs(a.y - b.y), abs((-a.x - a.y) - (-b.x - b.y))))
 
-## Get all 6 neighbors of a hex
+
+## ── Navigation (all use step-count, not weighted) ──
+
 func get_neighbors(hex: Vector2i) -> Array[Vector2i]:
-	var neighbors: Array[Vector2i] = []
-	for dir in DIRECTIONS:
-		var neighbor = hex + dir
-		if cells.has(neighbor) and cells[neighbor].is_passable:
-			neighbors.append(neighbor)
-	return neighbors
+	var n: Array[Vector2i] = []
+	for d in DIRECTIONS:
+		var nb = hex + d
+		if cells.has(nb) and cells[nb].is_passable and not cells[nb].occupant:
+			n.append(nb)
+	return n
 
-## Get all hexes within a given range (movement / attack range)
-func get_range(center: Vector2i, distance: int) -> Array[Vector2i]:
+
+func get_range(center: Vector2i, dist: int) -> Array[Vector2i]:
+	"""BFS: all passable unoccupied hexes within `dist` steps."""
 	var result: Array[Vector2i] = []
 	var visited: Dictionary = {}
 	var frontier: Array[Vector2i] = [center]
 	visited[center] = 0
-
 	while frontier.size() > 0:
-		var current = frontier.pop_front()
-		var dist = visited[current]
-
-		if dist <= distance and current != center:
-			result.append(current)
-
-		if dist < distance:
-			for neighbor in get_neighbors(current):
-				if not visited.has(neighbor):
-					visited[neighbor] = dist + 1
-					frontier.append(neighbor)
-
+		var cur = frontier.pop_front()
+		var d = visited[cur]
+		if d <= dist and cur != center:
+			result.append(cur)
+		if d < dist:
+			for nb in get_neighbors(cur):
+				if not visited.has(nb):
+					visited[nb] = d + 1
+					frontier.append(nb)
 	return result
 
-## A* pathfinding between two hexes
+
 func find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
+	"""BFS shortest path (unweighted)."""
 	if not cells.has(start) or not cells.has(goal):
 		return []
-	if not cells[goal].is_passable:
+	if not cells[goal].is_passable or cells[goal].occupant:
 		return []
 
 	var frontier: Array[Vector2i] = [start]
 	var came_from: Dictionary = {}
-	var cost_so_far: Dictionary = {}
-	came_from[start] = null  # use a sentinel
-	cost_so_far[start] = 0
+	var visited: Dictionary = {}
+	visited[start] = true
 
 	while frontier.size() > 0:
-		# Find lowest-cost hex in frontier
-		var current: Vector2i = frontier[0]
-		for hex in frontier:
-			if cost_so_far[hex] < cost_so_far[current]:
-				current = hex
-
-		if current == goal:
+		var cur = frontier.pop_front()
+		if cur == goal:
 			break
+		for nb in get_neighbors(cur):
+			if nb == goal:
+				# Allow goal even if occupied (we're targeting the unit on it)
+				came_from[goal] = cur
+				frontier.clear()
+				break
+			if not visited.has(nb):
+				visited[nb] = true
+				came_from[nb] = cur
+				frontier.append(nb)
 
-		frontier.erase(current)
-
-		for next in get_neighbors(current):
-			var move_cost = cells[next].movement_cost
-			var new_cost = cost_so_far[current] + move_cost
-
-			if not cost_so_far.has(next) or new_cost < cost_so_far[next]:
-				cost_so_far[next] = new_cost
-				came_from[next] = current
-				if not frontier.has(next):
-					frontier.append(next)
-
-	# Reconstruct path
 	if not came_from.has(goal):
-		return []  # no path
+		return []
 
 	var path: Array[Vector2i] = []
-	var current = goal
-	while current != start:
-		path.push_front(current)
-		current = came_from[current]
-
+	var cur2 = goal
+	while cur2 != start:
+		path.push_front(cur2)
+		cur2 = came_from[cur2]
 	return path
 
-## Hex distance (axial)
-static func distance(a: Vector2i, b: Vector2i) -> int:
-	var dq = abs(a.x - b.x)
-	var dr = abs(a.y - b.y)
-	var ds = abs((-a.x - a.y) - (-b.x - b.y))
-	return maxi(dq, maxi(dr, ds))
 
 func get_line(from: Vector2i, to: Vector2i) -> Array[Vector2i]:
-	"""Get all hexes in a straight line from 'from' to 'to' (for line-of-sight attacks)"""
 	var result: Array[Vector2i] = []
-	var dist = distance(from, to)
-	if dist == 0:
+	var d = distance(from, to)
+	if d == 0:
 		return result
-
-	for i in range(1, dist + 1):
-		var t = float(i) / float(dist)
-		var q = lerpf(from.x, to.x, t)
-		var r = lerpf(from.y, to.y, t)
-		var hex = hex_round(q, r)
-		if hex != from and cells.has(hex):
-			result.append(hex)
-
+	for i in range(1, d + 1):
+		var t = float(i) / float(d)
+		var h = hex_round(lerpf(from.x, to.x, t), lerpf(from.y, to.y, t))
+		if h != from and cells.has(h):
+			result.append(h)
 	return result
 
 
-## ── Cell Data ──
+## ── Cell ──
 
 class HexCell:
 	var coords: Vector2i
-	var terrain: TerrainData.Type = TerrainData.Type.GRASS
+	var terrain: int = 0  # TerrainData.Type
 	var is_passable: bool = true
 	var movement_cost: float = 1.0
-	var occupant: Battler = null  # unit currently on this tile
+	var occupant = null  # Battler
 	var is_highlighted: bool = false
 
-	func _init(p_coords: Vector2i) -> void:
-		coords = p_coords
+	func _init(p: Vector2i):
+		coords = p
 
-	func set_terrain(p_terrain: TerrainData.Type) -> void:
-		terrain = p_terrain
-		var terrain_data = TerrainData.get_data(terrain)
-		is_passable = terrain_data.is_passable
-		movement_cost = terrain_data.movement_cost
+	func set_terrain(t: int):
+		terrain = t
+		var td = TerrainData.get_data(t)
+		is_passable = td.get("is_passable", true)
+		movement_cost = td.get("movement_cost", 1.0)
