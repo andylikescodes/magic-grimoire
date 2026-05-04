@@ -1,10 +1,8 @@
 extends Node2D
 
-## ── Magic Grimoire — Battle Scene ──
-## Playable prototype: hex grid, unit movement, combat, AI turns.
+## ── Magic Grimoire — Battle Scene v2 ──
+## Fixes: full map view, unit name labels, AI stuck bug, error log on screen.
 
-# Preload all scripts that define class_name — Godot headless requires this
-# for cross-file class resolution. The array is discarded; only side-effects matter.
 const _ALL_CLASSES = [
 	preload("res://src/battle/hex_grid.gd"),
 	preload("res://src/battle/terrain_data.gd"),
@@ -19,11 +17,14 @@ const _ALL_CLASSES = [
 # ── State ──
 var bm: BattleManager
 var hex_grid: HexGrid
-var hex_size: float = 32.0
+var hex_size: float = 28.0
+var map_offset: Vector2 = Vector2.ZERO
 var selected_move: MoveData = null
 var highlight_hexes: Array[Vector2i] = []
 var battle_over: bool = false
-var ai_busy: bool = false
+
+# ── Error / debug log (visible on screen) ──
+var error_log: Array[String] = []
 
 # ── Nodes ──
 var hex_layer: Node2D
@@ -33,7 +34,7 @@ var turn_label: Label
 var info_label: Label
 var move_panel: Control
 var log_label: RichTextLabel
-var battle_log: Array[String] = []
+var error_label: RichTextLabel
 
 
 func _ready():
@@ -49,31 +50,39 @@ func _setup_nodes():
 
 	turn_label = Label.new()
 	turn_label.position = Vector2(10, 10)
-	turn_label.add_theme_font_size_override("font_size", 16)
+	turn_label.add_theme_font_size_override("font_size", 18)
 	ui_layer.add_child(turn_label)
 
 	info_label = Label.new()
-	info_label.position = Vector2(10, 680)
-	info_label.add_theme_font_size_override("font_size", 12)
+	info_label.position = Vector2(10, 690)
+	info_label.add_theme_font_size_override("font_size", 11)
 	ui_layer.add_child(info_label)
 
 	move_panel = Control.new()
-	move_panel.position = Vector2(980, 10)
+	move_panel.position = Vector2(980, 40)
 	ui_layer.add_child(move_panel)
 
 	var end_btn = Button.new()
 	end_btn.text = "End Turn"
-	end_btn.position = Vector2(10, 35)
-	end_btn.size = Vector2(100, 30)
+	end_btn.position = Vector2(10, 40)
+	end_btn.size = Vector2(120, 34)
 	end_btn.pressed.connect(_on_end_turn)
 	ui_layer.add_child(end_btn)
 
+	# Battle log (top-right)
 	log_label = RichTextLabel.new()
-	log_label.position = Vector2(800, 400)
-	log_label.size = Vector2(450, 250)
+	log_label.position = Vector2(960, 10)
+	log_label.size = Vector2(300, 28)
 	log_label.bbcode_enabled = true
-	log_label.scroll_following = true
 	ui_layer.add_child(log_label)
+
+	# Error log (bottom-right, always visible)
+	error_label = RichTextLabel.new()
+	error_label.position = Vector2(800, 420)
+	error_label.size = Vector2(460, 260)
+	error_label.bbcode_enabled = true
+	error_label.scroll_following = true
+	ui_layer.add_child(error_label)
 
 
 func _start_battle():
@@ -81,7 +90,7 @@ func _start_battle():
 	bm.unit_moved.connect(_on_moved)
 	bm.battler_defeated.connect(_on_defeated)
 	bm.battle_ended.connect(_on_ended)
-	bm.turn_changed.connect(_on_turn_changed)
+	# Do NOT connect turn_changed — we drive AI manually to avoid signal reentrancy bugs
 
 	var player_cards = _make_roster([
 		["light_priestess", "光之圣女·露米娜", 5, 120, 55, 35, 50, 3],
@@ -108,11 +117,40 @@ func _start_battle():
 
 	bm.start_battle(player_cards, enemy_cards, null, terrain)
 	hex_grid = bm.hex_grid
-	hex_size = 32.0 + hex_grid.radius * 1.5
-	hex_size = clampf(hex_size, 28.0, 45.0)
+
+	# Calculate hex_size and offset to fit the ENTIRE map on screen
+	_calc_viewport()
 
 	_draw_all()
 	_update_info()
+	_update_move_buttons()
+
+
+func _calc_viewport():
+	# Find the bounding box of all hexes
+	var min_x = INF; var max_x = -INF
+	var min_y = INF; var max_y = -INF
+	for hex in hex_grid.cells:
+		var p = HexGrid.hex_to_pixel(hex, 1.0)  # unit-size coords
+		min_x = minf(min_x, p.x); max_x = maxf(max_x, p.x)
+		min_y = minf(min_y, p.y); max_y = maxf(max_y, p.y)
+
+	var map_w = max_x - min_x + 1.0
+	var map_h = max_y - min_y + 1.0
+
+	# Available screen space (leave margins for UI)
+	var avail_w = 920.0
+	var avail_h = 670.0
+
+	hex_size = minf(avail_w / map_w, avail_h / map_h)
+	hex_size = clampf(hex_size, 20.0, 50.0)
+
+	# Center the map
+	var center_x = (min_x + max_x) * hex_size / 2.0
+	var center_y = (min_y + max_y) * hex_size / 2.0
+	map_offset = Vector2(avail_w / 2.0 - center_x + 40, avail_h / 2.0 - center_y + 30)
+
+	_log_error("Map: %d hexes, hex_size=%.1f, offset=(%.0f,%.0f)" % [hex_grid.cells.size(), hex_size, map_offset.x, map_offset.y])
 
 
 func _make_roster(defs: Array) -> Array[CardData]:
@@ -151,7 +189,7 @@ func _draw_hexes():
 
 	for hex in hex_grid.cells:
 		var cell: HexGrid.HexCell = hex_grid.cells[hex]
-		var center = HexGrid.hex_to_pixel(hex, hex_size) + Vector2(400, 360)
+		var center = HexGrid.hex_to_pixel(hex, hex_size) + map_offset
 		var verts = _hex_verts(center, hex_size)
 
 		var fill = _terrain_color(cell.terrain)
@@ -163,18 +201,33 @@ func _draw_hexes():
 
 		var border = Line2D.new()
 		border.points = verts; border.points.append(verts[0])
-		border.width = 1.0; border.default_color = Color(0, 0, 0, 0.3)
+		border.width = 1.0; border.default_color = Color(0, 0, 0, 0.25)
 		hex_layer.add_child(border)
 
 
 func _draw_units():
 	for child in unit_layer.get_children(): child.queue_free()
 
-	var offset = Vector2(400, 360)
 	for unit: Battler in bm.all_units:
 		if not unit.is_alive: continue
 
-		var pos = HexGrid.hex_to_pixel(unit.hex_position, hex_size) + offset
+		var pos = HexGrid.hex_to_pixel(unit.hex_position, hex_size) + map_offset
+
+		# ── Name label ABOVE unit ──
+		var name_lbl = Label.new()
+		name_lbl.text = unit.card.display_name
+		name_lbl.position = pos - Vector2(40, 28)
+		name_lbl.size = Vector2(80, 16)
+		name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_lbl.add_theme_font_size_override("font_size", 10)
+
+		if unit.owner_id == 0:
+			name_lbl.add_theme_color_override("font_color", Color.WHITE)
+		else:
+			name_lbl.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+		unit_layer.add_child(name_lbl)
+
+		# ── Sprite ──
 		var sprite_path = "res://assets/sprites/" + unit.card.card_id + ".png"
 		var sprite: Node2D = null
 
@@ -182,38 +235,39 @@ func _draw_units():
 			var tex = load(sprite_path)
 			if tex is Texture2D:
 				var sr = Sprite2D.new()
-				sr.texture = tex; sr.scale = Vector2(0.35, 0.35)
+				sr.texture = tex; sr.scale = Vector2(0.30, 0.30)
 				sr.position = pos
-				if unit.owner_id == 1: sr.scale.x = -0.35
+				if unit.owner_id == 1: sr.scale.x = -0.30
 				sprite = sr
 
 		if not sprite:
 			var cr = ColorRect.new()
-			cr.size = Vector2(20, 20); cr.position = pos - Vector2(10, 10)
+			cr.size = Vector2(18, 18); cr.position = pos - Vector2(9, 9)
 			cr.color = Element.get_color(unit.card.element)
 			if unit.owner_id == 0: cr.color = cr.color.lightened(0.3)
 			sprite = cr
 
 		unit_layer.add_child(sprite)
 
-		# HP bar
+		# ── HP bar ──
+		var bar_w = 28.0
 		var bar_bg = ColorRect.new()
-		bar_bg.size = Vector2(28, 5); bar_bg.position = pos - Vector2(14, 18)
+		bar_bg.size = Vector2(bar_w, 5); bar_bg.position = pos - Vector2(bar_w/2, 14)
 		bar_bg.color = Color(0.3, 0.1, 0.1)
 		unit_layer.add_child(bar_bg)
 
 		var pct = float(unit.current_hp) / float(unit.max_hp)
 		var bar_fill = ColorRect.new()
-		bar_fill.size = Vector2(28 * pct, 5); bar_fill.position = pos - Vector2(14, 18)
+		bar_fill.size = Vector2(bar_w * pct, 5); bar_fill.position = pos - Vector2(bar_w/2, 14)
 		bar_fill.color = Color.GREEN if pct > 0.5 else Color.ORANGE if pct > 0.25 else Color.RED
 		unit_layer.add_child(bar_fill)
 
-		# Current battler ring
-		if unit == bm.current_battler and unit.owner_id == 0:
+		# ── Current battler ring ──
+		if unit == bm.current_battler and unit.owner_id == 0 and not battle_over:
 			var ring_pts = PackedVector2Array()
 			for i in range(24):
 				var a = deg_to_rad(i * 15.0)
-				ring_pts.append(pos + Vector2(cos(a) * 16, sin(a) * 16))
+				ring_pts.append(pos + Vector2(cos(a) * 14, sin(a) * 14))
 			var line = Line2D.new()
 			line.points = ring_pts; line.points.append(ring_pts[0])
 			line.width = 2.0; line.default_color = Color.YELLOW
@@ -245,11 +299,11 @@ func _terrain_color(t: int) -> Color:
 ## ── Input ──
 
 func _input(event):
-	if battle_over or ai_busy: return
+	if battle_over: return
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT): return
 	if bm.current_side != 0: return
 
-	var pos = event.position - Vector2(400, 360)
+	var pos = event.position - map_offset
 	var hex = HexGrid.pixel_to_hex(pos, hex_size)
 	if hex_grid.cells.has(hex): _click_hex(hex)
 
@@ -296,9 +350,9 @@ func _cancel_action():
 
 func _do_move(hex: Vector2i):
 	if not bm.move_unit(hex):
-		_add_log("❌ Cannot move there")
+		_add_log("Cannot move there")
 	else:
-		_add_log("🚶 %s moved" % bm.current_battler.card.display_name)
+		_add_log("%s moved" % bm.current_battler.card.display_name)
 	_clear_highlights()
 	_update_move_buttons()
 	_draw_all()
@@ -308,17 +362,21 @@ func _do_move(hex: Vector2i):
 func _do_attack(hex: Vector2i):
 	var result = bm.use_move(selected_move, hex)
 	if result.get("success"):
-		var line = "⚔ %s -> %s on %s" % [bm.current_battler.card.display_name, selected_move.display_name, result.get("target", "?")]
-		if result.has("damage"): line += " (-%d HP)" % result["damage"]
-		if result.get("defeated"): line += " DEFEATED!"
+		var line = "%s -> %s on %s" % [bm.current_battler.card.display_name, selected_move.display_name, result.get("target", "?")]
+		if result.has("damage"): line += " (-%d)" % result["damage"]
+		if result.get("defeated"): line += " DEFEATED"
 		_add_log(line)
 	else:
-		_add_log("No: %s" % result.get("error", "Failed"))
+		_add_log("FAIL: %s" % result.get("error", "?"))
 
 	_clear_highlights()
 	_update_move_buttons()
 	_draw_all()
 	_update_info()
+
+	# After player attack, check if next unit is enemy → AI turn
+	if not battle_over and bm.current_side == 1:
+		_do_ai_turns()
 
 
 func _on_end_turn():
@@ -326,17 +384,63 @@ func _on_end_turn():
 	_clear_highlights()
 	_update_move_buttons()
 	bm.current_battler.has_acted = true
-	_add_log(">> %s waits" % bm.current_battler.card.display_name)
+	_add_log("%s passes" % bm.current_battler.card.display_name)
 	bm._advance_turn()
 	_draw_all()
 	_update_info()
 	_update_move_buttons()
 
+	# If enemy turn now, run AI
+	if not battle_over and bm.current_side == 1:
+		_do_ai_turns()
+
+
+## ── AI (fixed: sequential processing, no signal reentrancy) ──
+
+func _do_ai_turns():
+	"""Process ALL enemy units sequentially using await."""
+	_process_next_ai()
+
+
+func _process_next_ai():
+	if battle_over or bm.current_side != 0:
+		return
+
+	var unit = bm.current_battler
+	if not unit or not unit.is_alive:
+		bm._advance_turn()
+		_draw_all(); _update_info(); _update_move_buttons()
+		if bm.current_side == 1:
+			await get_tree().create_timer(0.3).timeout
+			_process_next_ai()
+		return
+
+	_log_error("AI: %s thinking..." % unit.card.display_name)
+	await get_tree().create_timer(0.4).timeout
+
+	var unit_before = bm.current_battler  # track who was acting
+	var ai = AIController.new(bm)
+	var result = ai.take_turn()
+
+	# If AI didn't manage to attack (use_move advances turn internally),
+	# we need to manually advance the turn
+	if bm.current_battler == unit_before and bm.current_side == 1:
+		_log_error("AI: %s passes (no action)" % unit_before.card.display_name)
+		bm._advance_turn()
+
+	_draw_all(); _update_info(); _update_move_buttons()
+
+	if battle_over: return
+
+	if bm.current_side == 1:
+		await get_tree().create_timer(0.3).timeout
+		_process_next_ai()
+
 
 func _update_move_buttons():
 	for child in move_panel.get_children(): child.queue_free()
 
-	if not bm.current_battler or bm.current_side != 0: return
+	if not bm.current_battler or bm.current_side != 0 or battle_over: return
 	var active = bm.current_battler
 	var y = 0
 
@@ -367,7 +471,7 @@ func _update_move_buttons():
 
 
 func _on_move_btn(move: MoveData):
-	if bm.current_side != 0: return
+	if bm.current_side != 0 or battle_over: return
 	_clear_highlights()
 	selected_move = move
 
@@ -381,43 +485,17 @@ func _on_move_btn(move: MoveData):
 
 ## ── Signals ──
 
-func _on_turn_changed(_phase, side):
-	_update_info()
-	_draw_all()
-	_update_move_buttons()
-	if side == 1 and not battle_over: _do_ai_turn()
-
-
-func _do_ai_turn():
-	if ai_busy or battle_over: return
-	ai_busy = true
-	var timer = get_tree().create_timer(0.6)
-	timer.timeout.connect(_ai_step)
-	_add_log("AI thinking...")
-
-
-func _ai_step():
-	if battle_over: ai_busy = false; return
-	var ai = AIController.new(bm)
-	var result = ai.take_turn()
-	if result.get("success") and result.get("action") == "wait":
-		_add_log("AI %s waits" % bm.current_battler.card.display_name)
-	_draw_all(); _update_info(); _update_move_buttons()
-	ai_busy = false
-	if bm.current_side == 1 and not battle_over:
-		var timer = get_tree().create_timer(0.5)
-		timer.timeout.connect(_ai_step)
-
-
 func _on_moved(_b, _f, _t): _draw_all()
-func _on_defeated(battler: Battler): _add_log("%s defeated!" % battler.card.display_name); _draw_all()
+func _on_defeated(battler: Battler):
+	_add_log("%s defeated!" % battler.card.display_name)
+	_draw_all()
 
 func _on_ended(victory: bool):
 	battle_over = true
 	var msg = "VICTORY!" if victory else "DEFEATED!"
 	turn_label.text = msg
 	turn_label.add_theme_color_override("font_color", Color.GREEN if victory else Color.RED)
-	_add_log(msg)
+	_add_log("=== " + msg + " ===")
 
 
 func _update_info():
@@ -426,13 +504,19 @@ func _update_info():
 	if active:
 		var side = "YOU" if active.owner_id == 0 else "ENEMY"
 		turn_label.text = "%s - %s [%s]" % [side, active.card.display_name, Element.get_name(active.card.element)]
-	info_label.text = "Click unit: show moves | Click hex: move | Pick move: click enemy | End Turn: pass"
+	info_label.text = "Click unit: moves | Click hex: move | Move btn: attack | End Turn: pass"
 
 
 func _add_log(text: String):
-	battle_log.append(text)
-	if battle_log.size() > 80: battle_log.pop_front()
+	_log_error(text)
+
+
+## ── Error / debug log (always visible on screen) ──
+
+func _log_error(text: String):
+	error_log.append(text)
+	if error_log.size() > 80: error_log.pop_front()
 	var lines: Array[String] = []
-	for i in range(maxi(0, battle_log.size() - 12), battle_log.size()):
-		lines.append(battle_log[i])
-	log_label.text = "\n".join(lines)
+	for i in range(maxi(0, error_log.size() - 15), error_log.size()):
+		lines.append(error_log[i])
+	error_label.text = "[Debug Log]\n" + "\n".join(lines)
