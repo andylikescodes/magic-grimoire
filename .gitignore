@@ -3,8 +3,12 @@
 *.import
 export.cfg
 *.translation
-export_presets.cfg
 *.tmp
+
+# Build artifacts
+build/
+dist/
+export/
 
 # OS
 .DS_Store
@@ -13,10 +17,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# Build artifacts
-build/
-dist/
-
 # IDE
 .vscode/
 .idea/
@@ -24,4 +24,3 @@ dist/
 
 # Godot specific
 *.uid
-export/
